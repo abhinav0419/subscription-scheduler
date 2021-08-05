@@ -1,0 +1,238 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Template to Deploy the Lambda Function with the API Gateway
+Parameters:
+  S3Source:
+    Type: String
+    Description: S3 Bucket where the function code is present
+  Name:
+    Type: String
+    Description: Name of the Lambda Function
+  Environment:
+    Type: String
+    Description: Deployment Environment
+  RestApiId:
+    Type: String
+    Description: REST API id to attach the Lambda Function as a route handler
+  ParentId:
+    Type: String
+    Description: Environment Parent id
+  CodebuildId:
+    Type: String
+    Description: Codebuild id, the unique identifier
+  FirebaseConfig:
+    Type: String
+
+
+# Conditions:
+#   IsProd: !Equals [!Ref Environment, "prod"]
+
+Resources:
+  # FOR API ENDPOINT
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: !Ref S3Source
+        S3Key: !Sub "${Name}/artifact-${Name}.zip"
+      Description: !Sub Lambda function for the ${Name} api having build id ${CodebuildId}
+      Environment:
+        Variables:
+          NODE_ENV: !Ref Environment
+          VERSION: !Ref CodebuildId
+          FIREBASE_CONFIG: !Ref FirebaseConfig
+      FunctionName: !Sub "${Environment}-function-${Name}"
+      Handler: index.handler
+      MemorySize: 128
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: nodejs12.x
+      Timeout: 25
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Environment}-lambda-role-${Name}"
+      Tags:
+        - Key: project
+          Value: vendor-erp
+        - Key: environment
+          Value: !Ref Environment
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - "sts:AssumeRole"
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+        Version: "2012-10-17"
+      Path: /
+      Policies:
+        - PolicyName: !Sub "policy-${Environment}-${Name}"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+              - Action:
+                  - dynamodb:PutItem
+                Effect: Allow
+                Resource:
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/users-subscriptions"
+
+  LambdaFunctionApiGatewayInvoke:
+    DependsOn:
+      - LambdaFunction
+      - ProxyResourceAny
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt LambdaFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApiId}/*/*/${Name}/*
+
+  ApiGatewayRootResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref ParentId
+      PathPart: !Sub ${Name}
+      RestApiId: !Ref RestApiId
+
+  ProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref ApiGatewayRootResource
+      RestApiId: !Ref RestApiId
+      PathPart: "{proxy+}"
+
+  ProxyResourceAny:
+    DependsOn:
+      - LambdaFunction
+      - ApiGatewayRootResource
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      # ApiKeyRequired: true
+      HttpMethod: ANY
+      ResourceId:
+        Ref: ProxyResource
+      RestApiId:
+        Ref: RestApiId
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${Arn}/invocations
+          - Arn:
+              Fn::GetAtt:
+                - LambdaFunction
+                - Arn
+        IntegrationResponses: []
+
+  ApiGatewayResourceMethodOPTIONS:
+    DependsOn:
+      - LambdaFunction
+      - ApiGatewayRootResource
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      RestApiId: !Ref RestApiId
+      ResourceId: !Ref ProxyResource
+      HttpMethod: OPTIONS
+      Integration:
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ""
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        Type: MOCK
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: Default
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: false
+            method.response.header.Access-Control-Allow-Methods: false
+            method.response.header.Access-Control-Allow-Origin: false
+
+  ApiGatewayDeploy:
+    DependsOn:
+      - ApiGatewayRootResource
+      - ProxyResource
+      - ProxyResourceAny
+      - ApiGatewayResourceMethodOPTIONS
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref RestApiId
+      StageName: api
+
+  LambdaDeployCustomResource:
+    Type: Custom::LambdaVersion
+    Properties:
+      ServiceToken: !GetAtt LambdaDeployFunction.Arn
+      FunctionName: !Sub ${Environment}-function-${Name}
+      S3Bucket: !Ref S3Source
+      S3Key: !Sub "${Name}/artifact-${Name}.zip"
+      Nonce: !Ref CodebuildId
+
+  LambdaDeployFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - LambdaFunction
+    Properties:
+      FunctionName: !Sub "${Environment}-deployment-function-${Name}"
+      Handler:
+        index.handler
+        # TODO: IF CONDITION FOR PROD AND NON PROD ACCOUNT
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/DeploymentLambdaRole
+      # !If
+        # - IsProd
+        # - 
+      Code:
+        ZipFile: !Sub |
+          import boto3
+          import json
+          import logging
+          import cfnresponse
+          import time
+          from botocore.exceptions import ClientError
+          def handler(event, context):
+            logger = logging.getLogger()
+            logger.setLevel(logging.INFO)
+            logger.info (f"Input parameters from cloud formation: {event}")
+            responseData = {}
+            if (event["RequestType"] == 'Delete'):
+              logger.info("Responding to delete event...")
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)
+            try:            
+              lambdaClient = boto3.client('lambda')
+              s3Bucket = event['ResourceProperties']['S3Bucket']
+              s3Key = event['ResourceProperties']['S3Key']
+              functionName = event['ResourceProperties']['FunctionName']
+              logger.info("Updating the function code for Lambda function '{}' to use the code stored in S3 bucket '{}' at key location '{}'".format(functionName, s3Bucket, s3Key))
+              logger.info("Sleeping for 10 seconds to allow IAM permisisons to take effect")
+              time.sleep(10)             
+              response = lambdaClient.update_function_code(
+                FunctionName=functionName,
+                S3Bucket='{}'.format(s3Bucket),
+                S3Key='{}'.format(s3Key),
+                Publish=True)
+              responseValue = "Function: {}, Version: {}, Last Modified: {}".format(response["FunctionName"],response["Version"],response["LastModified"])
+              responseData['Data'] = responseValue
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, response["FunctionArn"])
+            except ClientError as e:
+              errorMessage = e.response['Error']['Message']
+              logger.error(errorMessage)
+              cfnresponse.send(event, context, cfnresponse.FAILED, responseData)
+      Runtime: "python3.6"
+      Timeout: "30"

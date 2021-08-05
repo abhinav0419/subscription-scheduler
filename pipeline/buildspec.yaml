@@ -1,0 +1,27 @@
+version: 0.2
+
+env:
+  variables:
+     cmk: "bdaa4c08-684b-467b-884f-460282ab7fa2"
+  git-credential-helper: yes
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 10
+    commands:
+      - npm i cfn-create-or-update -g --silent
+  pre_build:
+    commands:
+      - npm install
+  build:
+    commands:
+      - npm run build
+      # - npm test
+  post_build:
+    commands:
+      - npm prune --prod
+      - node ./pipeline/version.js
+      - zip -r artifact-$Name ./* -x **.ts -x **.js.map -x .git -q
+      - aws s3 cp ./artifact-$Name.zip s3://$S3Source/$Name/
+      - cfn-create-or-update --stack-name codepipeline-$Name --template-body file://pipeline/codepipeline.yaml --capabilities CAPABILITY_NAMED_IAM --parameters ParameterKey=S3Source,ParameterValue=$S3Source ParameterKey=S3ObjectKey,ParameterValue=$Name/artifact-$Name.zip  ParameterKey=Name,ParameterValue=$Name --sse-kms-key-id $cmk --sse aws:kms --region us-east-1

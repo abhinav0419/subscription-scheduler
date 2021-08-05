@@ -1,0 +1,38 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: cloudformation template to create the codebuild stack for this lambda function
+Parameters:
+  Name:
+    Description: Name of the Lambda function
+    Type: String
+  Location:
+    Description: Repository Url
+    Type: String
+  S3Source:
+    Description: S3 Artifacts Bucket
+    Type: String
+    Default: social-code-artifact-bucket
+
+Resources:
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "codebuild-${Name}"
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Source:
+        Type: GITHUB
+        Location: !Ref Location
+        BuildSpec: pipeline/buildspec.yaml
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:4.0
+        EnvironmentVariables:
+          - Name: Name
+            Value: !Ref Name
+          - Name: S3Source
+            Value: !Ref S3Source
+      TimeoutInMinutes: 5
+      ServiceRole: !Sub "arn:aws:iam::${AWS::AccountId}:role/codebuild-role"
+
+# aws cloudformation create-stack --stack-name codebuild-payment-function --template-body file://pipeline/codebuild.yaml --parameters ParameterKey=Name,ParameterValue=payment-function ParameterKey=Location,ParameterValue=https://github.com/XP-Cover/payments-lambda.git
