@@ -35,4 +35,4 @@ Resources:
       TimeoutInMinutes: 5
       ServiceRole: !Sub "arn:aws:iam::${AWS::AccountId}:role/codebuild-role"
 
-# aws cloudformation create-stack --stack-name codebuild-payment-function --template-body file://pipeline/codebuild.yaml --parameters ParameterKey=Name,ParameterValue=payment-function ParameterKey=Location,ParameterValue=https://github.com/XP-Cover/payments-lambda.git
+# aws cloudformation create-stack --stack-name codebuild-subscription-function --template-body file://pipeline/codebuild.yaml --parameters ParameterKey=Name,ParameterValue=subscription-function ParameterKey=Location,ParameterValue=https://github.com/abhinav0419/subscription-scheduler.git
