@@ -23,13 +23,25 @@ export default class SubscriptionController {
         userSubsData = await this.firebase.findOneSubscription(
           userId,
           creatorId
-        );
+        ),
+        [userInfo, creatorInfo] = await Promise.all([
+          this.firebase.findOneUser(userId),
+          this.firebase.findOneUser(creatorId),
+        ]);
+      let { wallet_balance } = userInfo!,
+        { wallet_balance: creator_wallet_balance, subscriptionBundles } =
+          creatorInfo!;
       let checkValidity: boolean = false;
+
+      const commission = amount * 0.2;
       if (userSubsData) {
         const { valid } = userSubsData?.data();
         checkValidity = valid;
       }
       if (!checkValidity) {
+        wallet_balance -= amount;
+        creator_wallet_balance = creator_wallet_balance ?? 0;
+        creator_wallet_balance += amount - commission;
         let presentDate = created_at,
           payload: ISubscription[] = [];
         for (let i = 0; i < duration; i++) {
@@ -50,7 +62,28 @@ export default class SubscriptionController {
           };
           payload.push(data);
         }
-        const userSubscription: IUserSubscripion = {
+        const creatorObj = {
+            id: v4().replace(/-/g, ""),
+            amount_paid: amount,
+            commission: commission,
+            created_at: firestore.Timestamp.now(),
+            payment_status: "completed",
+            creator_userId: creatorId,
+            type,
+            is_settled: true,
+            from_userId: userId,
+          },
+          userObj = {
+            id: v4().replace(/-/g, ""),
+            amount_paid: amount,
+            commission: commission,
+            created_at: firestore.Timestamp.now(),
+            payment_status: "completed",
+            creator_userId: creatorId,
+            type,
+            is_settled: true,
+          };
+        const userSubscription = {
           userId,
           creatorId,
           id: SubscriptionController.id,
@@ -63,13 +96,28 @@ export default class SubscriptionController {
                 .format("yyyy-MM-DD")
             )
           ),
-          amount,
+          amount: amount - commission,
+          commission,
           valid: true,
         };
         this.dynamoDb.saveSubscriptionData(payload),
           await Promise.all([
             ...payload.map((i) => this.firebase.userSubscriptionDue(userId, i)),
             this.firebase.saveSubscription(userId, userSubscription),
+            this.firebase.addOrUpdatePayment(userId, userObj),
+            this.firebase.addOrUpdatePayment(creatorId, creatorObj),
+            this.firebase.updateVirtualWallet(userId, wallet_balance),
+            this.firebase.updateVirtualWallet(
+              creatorId,
+              creator_wallet_balance
+            ),
+            this.firebase.addAdminComission({
+              creatorId: creatorId,
+              userId,
+              commission,
+              amount,
+              createdAt: firestore.Timestamp.now(),
+            }),
           ]);
         await this.endUserSubscription(userSubscription);
         res
