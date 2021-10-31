@@ -67,18 +67,39 @@ export default class SubscriptionController {
           valid: true,
         };
         this.dynamoDb.saveSubscriptionData(payload),
-        await Promise.all([
-          ...payload.map((i) => this.firebase.userSubscriptionDue(userId, i)),
-          this.firebase.saveSubscription(userId, userSubscription),
-        ]);
+          await Promise.all([
+            ...payload.map((i) => this.firebase.userSubscriptionDue(userId, i)),
+            this.firebase.saveSubscription(userId, userSubscription),
+          ]);
         await this.endUserSubscription(userSubscription);
-        res.status(200).send();
+        res
+          .status(200)
+          .header({
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Allow-Methods": "POST",
+          })
+          .send();
       } else {
-        res.status(203).send();
+        res
+          .status(203)
+          .header({
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Allow-Methods": "POST",
+          })
+          .send();
       }
     } catch (err) {
       console.log(err);
-      res.status(500).send({ message: "Internal Server Error." });
+      res
+        .status(500)
+        .header({
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Headers": "Content-Type",
+          "Access-Control-Allow-Methods": "POST",
+        })
+        .send({ message: "Internal Server Error." });
     }
   };
 
